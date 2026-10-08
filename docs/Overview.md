@@ -4,7 +4,7 @@
 - **Audience:** executives, product owners, risk & audit, operations
 - **Companion document:** [`README.md`](../README.md) — the technical build and operating manual
 - **GIT Repo** [Scalable_HA_PostgreSQL](https://github.com/georgelza/Scalable_HA_PostgreSQL)
-
+- **Blog** [Scalable / Highly Available PostgreSQL Platform](https://medium.com/@georgelza/scalable-highly-available-postgresql-platform-b8e602de2054?postPublishedType=initial)
 ---
 
 ## 1. In one paragraph
