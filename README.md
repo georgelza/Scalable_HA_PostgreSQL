@@ -9,7 +9,8 @@ survives the primary dying without anyone touching anything?*
 > **Non-technical audience:** see [`docs/Overview.md`](docs/Overview.md) — the
 > business-level view of what this design does, why it is built this way, and what
 > it deliberately does **not** yet do. This document is the technical build and
-> operating manual; that one is the executive summary.
+> operating manual; that one is the executive summary. 
+> The Repo is also available as a Blog: [Scalable / Highly Available PostgreSQL Platform](https://medium.com/@georgelza/scalable-highly-available-postgresql-platform-b8e602de2054?postPublishedType=initial)
 
 ```
    ALL DML ──────────▶ ┌────────────────────────────────────────────────┐
