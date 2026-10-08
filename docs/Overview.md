@@ -1,7 +1,9 @@
 # Data Platform — Business Overview
 
-**Audience:** executives, product owners, risk & audit, operations
-**Companion document:** [`README.md`](../README.md) — the technical build and operating manual
+
+- **Audience:** executives, product owners, risk & audit, operations
+- **Companion document:** [`README.md`](../README.md) — the technical build and operating manual
+- **GIT Repo** [Scalable_HA_PostgreSQL](https://github.com/georgelza/Scalable_HA_PostgreSQL)
 
 ---
 
