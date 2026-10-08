@@ -1,0 +1,64 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam roundcorner 12
+skinparam ArrowColor #334155
+skinparam ArrowThickness 1.6
+skinparam titleFontSize 19
+skinparam titleFontStyle bold
+
+title BZ Data Platform — Business Context
+
+skinparam rectangle {
+  BorderColor #334155
+  FontColor #0F172A
+  FontStyle bold
+  FontSize 12
+}
+skinparam actor {
+  BorderColor #334155
+  FontColor #0F172A
+  FontStyle bold
+}
+skinparam component {
+  BorderColor #334155
+  FontColor #0F172A
+  FontSize 11
+}
+
+actor "Customer-facing\nApplications" as APP #DBEAFE
+actor "Data Analysts &\nReporting" as ANA #DBEAFE
+actor "Platform &\nOperations Teams" as OPS #DBEAFE
+
+rectangle "BZ Data Platform" as BZ #F1F5F9 {
+  component "Trusted Write\nDoor" as WR #0EA5E9
+  component "Reporting Read\nDoor" as RD #22C55E
+  component "Control Plane\n(who is the writer?)" as CP #F59E0B
+  component "Data Core\n(PostgreSQL 16, sharded)" as CORE #6366F1
+}
+
+rectangle "External Suppliers" as EXT #F8FAFC {
+  component "Cloud / Hosting\n& Network" as CLOUD #94A3B8
+  component "Monitoring &\nAlerting" as MON #94A3B8
+}
+
+APP --> WR : "record sales, stock,\ncustomer activity"
+ANA --> RD : "dashboards, exports,\nreporting queries"
+OPS --> CP : "monitor, test, recover"
+CP ..> WR : "keeps the write door\npointing at the live writer"
+WR --> CORE : "committed changes"
+RD --> CORE : "live reads, never writes"
+CORE ..> CLOUD : "runs on"
+CORE ..> MON : "reports health"
+
+legend right
+  |= Meaning |
+  | <b>Blue</b> - change is recorded and always acknowledged |
+  | <b>Green</b> - information is served, never altered |
+  | <b>Amber</b> - assurance: the platform proves its own state |
+  | <b>Indigo</b> - the protected business record itself |
+endlegend
+
+@enduml

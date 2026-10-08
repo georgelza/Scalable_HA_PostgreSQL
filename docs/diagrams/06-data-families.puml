@@ -1,0 +1,90 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam roundcorner 14
+skinparam ArrowColor #334155
+skinparam ArrowThickness 1.8
+skinparam titleFontSize 19
+skinparam titleFontStyle bold
+
+title Where the Business Record Lives — Four Data Families, Four Intentional Rules
+
+rectangle "COMPLETE PICTURE\ncustomer, stock, orders" as BZ #F1F5F9 {
+  entity "Customer" as CUST #6366F1 {
+    * customer_id : identity <<key>>
+    --
+    name : text
+    email : text
+    since : date
+  }
+
+  entity "Address" as ADDR #A5B4FC {
+    * address_id : identity <<key>>
+    --
+    * customer_id : <<grouped by customer>>
+    address_type : home | work | billing
+    line : text
+  }
+
+  entity "Stock Item" as STOCK #0EA5E9 {
+    * sku : identity <<key>>
+    --
+    description : text
+    category : text
+    on_hand : number
+  }
+
+  entity "Sale" as SALE #22C55E {
+    * sale_id : identity <<key>>
+    --
+    customer_id : reference
+    sku : reference
+    amount : number
+    sold_at : timestamp <<split by month>>
+  }
+}
+
+CUST "1" --> "0..*" ADDR : "holds"
+CUST "1" --> "0..*" SALE : "makes"
+STOCK "1" --> "0..*" SALE : "is sold as"
+
+note right of CUST #EEF2FF
+  **Single, authoritative copy.**
+  Everything else may refer to a customer,
+  but only here does a customer truly live.
+end note
+
+note right of ADDR #EEF2FF
+  **Split across servers by customer.**
+  A customer's addresses are always found
+  together on the same server — so a
+  customer's record is never scattered,
+  and this family grows without limit.
+end note
+
+note right of STOCK #EFF6FF
+  **Small and constantly busy.**
+  Kept whole on purpose: splitting it
+  would add cost for no commercial gain.
+end note
+
+note right of SALE #F0FDF4
+  **Split by month.**
+  Old months are set aside in full, then
+  archived without disturbing live business.
+  Queries only ever examine what is
+  relevant — the fastest month simply
+  falls out of the result.
+end note
+
+legend bottom
+  |= Colour | Family | Why |
+  | <#6366F1> | Local | Real relationships depend on it |
+  | <#A5B4FC> | Distributed | Grows forever; kept together by customer |
+  | <#0EA5E9> | Whole | Small, stable, always hot |
+  | <#22C55E> | Time-partitioned | Archive old periods; query only what matters |
+endlegend
+
+@enduml

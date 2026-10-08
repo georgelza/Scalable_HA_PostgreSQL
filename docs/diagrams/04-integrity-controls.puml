@@ -1,0 +1,46 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam roundcorner 14
+skinparam ArrowColor #334155
+skinparam ArrowThickness 1.8
+skinparam titleFontSize 19
+skinparam titleFontStyle bold
+
+title Integrity Controls — Four Independent Locks on Data Accuracy
+
+rectangle "1. ONE IDENTITY,\nTWO DOORS" as C1 #DBEAFE {
+  component "The same sign-in works\nfor changing and for enquiring" as C1A
+}
+rectangle "2. SEPARATE GATEWAYS" as C2 #DCFCE7 {
+  component "Read and change traffic\nare physically distinct paths" as C2A
+}
+rectangle "3. DATABASE-LEVEL LOCK" as C3 #FEF3C7 {
+  component "The read path carries a\npermanently read-only identity" as C3A
+}
+rectangle "4. AUTOMATED PROOF" as C4 #FCE7F3 {
+  component "A repeatable test asserts\nthe guarantee every run" as C4A
+}
+
+C1 -[#0EA5E9]-> C2
+C2 -[#22C55E]-> C3
+C3 -[#F59E0B]-> C4
+
+note bottom of C3 #FFFBEB
+  The lock sits **in the database**, not in a
+  configuration file. If any component above is
+  ever misconfigured, the database still refuses
+  the change. Controls that sit next to the risk
+  are not controls.
+end note
+
+note bottom of C4 #FDF2F8
+  Guarantees are only real if they are
+  **tested on demand**. A single command
+  re-proves the whole set, and is treated
+  as a release gate.
+end note
+
+@enduml

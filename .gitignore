@@ -1,0 +1,19 @@
+# bz/.gitignore
+#
+# Everything below is machine-local state or a credential. Nothing in this list
+# should ever be committed.
+#
+# NOTE: .env IS DELIBERATELY NOT IGNORED. It holds local-development credentials
+# that exist so `docker compose up` works with no setup, and they are labelled as
+# such in the file. Do not put anything real in it — a real deployment takes
+# these from a secret store, not from a file in the tree.
+
+# PostgreSQL data directories (bind mounts). Recreated by `docker compose up`;
+# wiped by `docker compose down -v`.
+data/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,57 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam roundcorner 14
+skinparam ArrowColor #334155
+skinparam ArrowThickness 1.8
+skinparam titleFontSize 19
+skinparam titleFontStyle bold
+
+title Growth on Demand — How Capacity Is Added Without Redesign
+
+rectangle "TODAY — Proven\n(measured & tested)" as T0 #DCFCE7 {
+  component "1 write leader\n+ 1 live mirror" as A1
+  component "Read capacity spread\nacross every node" as A2
+}
+
+rectangle "STEP 1 — Low effort\n(add read nodes)" as T1 #DBEAFE {
+  component "Grow reporting and\ncustomer enquiries" as B1
+  component "No change to any\napplication" as B2
+}
+
+rectangle "STEP 2 — Low risk\n(before volume forces it)" as T2 #FEF3C7 {
+  component "Divide the business into\nindependent parts by customer" as C1a
+  component "Each part keeps its own\nleader + own mirror" as C2a
+}
+
+rectangle "STEP 3 — Required for\nregulated deployment" as T3 #FFE4E6 {
+  component "Zero-lag confirmation\nbefore a change is final" as D1a
+  component "Remove the single\ngateway as a bottleneck" as D2a
+}
+
+rectangle "STEP 4 — Independent\nrecovery procedures" as T4 #FCE7F3 {
+  component "Automatic rebuild of a\ndiscarded node" as E1a
+}
+
+T0 -[#22C55E]-> T1 : "read volume grows"
+T1 -[#0EA5E9]-> T2 : "write volume grows"
+T2 -[#F59E0B]-> T3 : "regulatory requirement"
+T3 -[#DC2626]-> T4 : "operational maturity"
+
+note bottom of T0 #F0FDF4
+  **What scales first, and why:**
+  enquiries are cheap to add and carry no risk.
+  Recording changes is the expensive axis —
+  it is scaled last, by dividing the business
+  into parts, never by making one server faster.
+end note
+
+note bottom of T2 #FFFBEB
+  **Key business property:** growth is bought in
+  steps, each of which is reversible and none of
+  which requires applications to be rewritten.
+end note
+
+@enduml

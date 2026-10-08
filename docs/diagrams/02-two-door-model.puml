@@ -1,0 +1,68 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam roundcorner 14
+skinparam ArrowColor #334155
+skinparam ArrowThickness 1.8
+skinparam titleFontSize 19
+skinparam titleFontStyle bold
+skinparam rectangle {
+  BorderColor #334155
+  FontColor #0F172A
+  FontStyle bold
+  FontSize 12
+}
+skinparam component {
+  BorderColor #334155
+  FontColor #0F172A
+  FontSize 11
+}
+
+title Two Doors, One Identity — Separating Change from Enquiry
+
+rectangle "Any Application\none username, one password" as CLIENT #E2E8F0
+
+rectangle "WRITE PATH\nalways the current leader" as RW #0EA5E9 {
+  component "Failover-Aware\nWrite Gateway" as GATE #38BDF8
+  component "Health Watch\nwho is the leader?" as WATCH #7DD3FC
+  component "Automatic Leader\nPromotion" as PROMO #BAE6FD
+}
+
+rectangle "READ PATH\nnever the leader's bottleneck" as RO #16A34A {
+  component "Read Gateway\nspreads across all sites" as RB #4ADE80
+  component "Safe Identity\nperpetually read-only" as ROID #86EFAC
+}
+
+rectangle "DATA CORE" as CORE #F1F5F9 {
+  component "PRIMARY\nholds the truth" as P #6366F1
+  component "STANDBY\nlive mirror, serves reads" as S #A5B4FC
+  P --> S : "continuous copy"
+}
+
+CLIENT --> RW : "changes"
+CLIENT --> RO : "questions"
+GATE --> WATCH
+WATCH --> PROMO
+RB --> ROID
+GATE --> P
+RB --> S
+
+WATCH -[#F59E0B]-> PROMO : "leader fails"
+PROMO -[#F59E0B]-> S : "promote to leader"
+ROID -[#F59E0B].> P : "backstop:\na stray write is refused"
+
+note bottom of CLIENT
+  **Why this matters:** the application never has to know
+  **which** server is in charge. It asks the same door every
+  time, so no integration can be built wrong.
+end note
+
+note bottom of ROID
+  Safety does not rely on the gateway behaving.
+  The database itself refuses any change that
+  arrives through the read door.
+end note
+
+@enduml

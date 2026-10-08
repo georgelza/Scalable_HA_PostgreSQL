@@ -1,0 +1,81 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam roundcorner 14
+skinparam ArrowColor #64748B
+skinparam ArrowThickness 1.8
+skinparam titleFontSize 19
+skinparam titleFontStyle bold
+skinparam rectangle {
+  FontColor #0F172A
+  FontStyle bold
+  FontSize 11
+  BorderColor #334155
+}
+skinparam note {
+  BackgroundColor #F8FAFC
+  BorderColor #94A3B8
+  FontColor #0F172A
+}
+
+title Business Continuity — What Happens When the Site in Charge Dies
+
+rectangle "<b>STEADY STATE</b>\nchanges recorded and acknowledged\nenquiries answered from every site" as N1 #DCFCE7
+rectangle "<b>READING GROWS</b>\nspare capacity is added,\nno application is changed" as N2 #DCFCE7
+rectangle "<b>WRITING GROWS</b>\nbusiness is divided into parts,\neach with its own leader" as N3 #DBEAFE
+
+rectangle "<b>THE SITE IN CHARGE DIES</b>\nsuddenly, without warning" as F1 #FECACA
+rectangle "<b>ENQUIRIES ARE NOT INTERRUPTED</b>\nthe live mirror carries straight on" as F2 #FEF3C7
+rectangle "<b>CHANGES ARE HELD, NOT LOST</b>\nnothing reaches a half-dead site" as F3 #FEF3C7
+rectangle "<b>FAILURE DETECTED</b>\nwithin seconds, no human involved" as F4 #FEF3C7
+rectangle "<b>FAILED SITE STOOD DOWN</b>\nso it can never disagree" as F5 #FEF3C7
+
+rectangle "<b>THE MIRROR IS PROMOTED</b>\nit becomes the site in charge" as R1 #BBF7D0
+rectangle "<b>WRITING RESUMES</b>\nsame unchanged connection" as R2 #86EFAC
+
+rectangle "failed site resynchronised\nin the background" as B1 #DBEAFE
+rectangle "rejoins as a follower\nunder operator control" as B2 #DBEAFE
+rectangle "<b>FULL SERVICE RESTORED</b>\nready to do it all again" as B3 #E0F2FE
+
+N1 -down-> N2
+N2 -down-> N3
+N3 -down-> F1
+F1 -down-> F2
+F2 -down-> F3
+F3 -down-> F4
+F4 -down-> F5
+F5 -down-> R1
+R1 -down-> R2
+R2 -down-> B1
+B1 -down-> B2
+B2 -down-> B3
+
+note right of R2
+  **Measured recovery: 5 to 10 seconds.**
+
+  The recovery is automatic, and it is
+  rehearsed by a repeatable test.
+  It is not a hope - it is demonstrated.
+
+  **What this design costs us:** because the
+  mirror is made a moment apart, the very last
+  few changes could be lost at the instant of
+  failure.
+
+  A regulated institution would close that gap.
+  This design deliberately does not yet,
+  and says so rather than hiding it.
+end note
+
+legend bottom
+  |= Phase | What the customer experiences |
+  | <#DCFCE7> | Running normally |
+  | <#FECACA> | The failure itself |
+  | <#FEF3C7> | The automatic response |
+  | <#BBF7D0> | Business resumes |
+  | <#DBEAFE> | Putting things right |
+endlegend
+
+@enduml

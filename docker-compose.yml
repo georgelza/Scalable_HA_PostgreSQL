@@ -1,0 +1,345 @@
+# docker-compose.yml — bz PostgreSQL stack (primary + read replica, failover-aware)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Project anchor: `name: bzpg` — deliberately DIFFERENT from the parent stack's
+# `corebanking`, so this compose project can be up, down and re-deployed without
+# touching (or colliding with) the CORE stack. Nothing here shares a network, a
+# container name, or a data directory with deploy/.
+#
+# SCOPE — WHAT WAS STRIPPED FROM deploy/docker-compose.yml
+#   Removed (non-Postgres): Kafka broker, Schema Registry, Control Center, Kafka
+#   Connect, kcat, Filebeat, RustFS, container registry + registry UI. What
+#   remains is the whole of the PostgreSQL estate and its two proxies.
+#   This file is a REDUCED COPY — deploy/docker-compose.yml is the canonical CORE
+#   stack and is NOT modified by anything in bz/.
+#
+# THE TWO ENDPOINTS, AND WHY THEY ARE DIFFERENT PRODUCTS
+#
+#   :6433  pgpool_rw     ALL DML, one endpoint, follows the primary.
+#                        Automatic failover: if the writer dies, a standby is
+#                        promoted and the app's connection string never changes.
+#   :6434  pgbouncer_ro  Reads, spread across every node, read-only.
+#
+#   The application uses ONE role and ONE password for both. Only the port
+#   differs. See bz/README.md §4.
+#
+# WHY NOT PGBOUNCER FOR WRITES
+#   PgBouncer cannot tell a primary from a standby — it knows only whether a host
+#   is reachable, and a healthy standby is perfectly reachable. A PgBouncer host
+#   list over both nodes therefore round-robins writes onto a read-only node about
+#   half the time, and a single-host PgBouncer cannot move when that host dies.
+#   Pgpool-II health-checks each backend and ASKS whether it is in recovery.
+#
+# IMAGE
+#   `citus-repmgr:12.1.14` is built from ../deploy/infrastructure/pg — the SAME
+#   Dockerfile the CORE stack uses (PostgreSQL 16 + Citus 12.1 + repmgr + pgvector,
+#   compiled from source for host-native arch, ADR-26). bz/ does not carry its own
+#   copy and does not patch it; pointing `build:` at that path reads it and writes
+#   nothing.
+#
+# USAGE
+#   docker compose up -d --build   start primary → replica → both proxies
+#   docker compose ps
+#   docker compose logs -f pg_replica
+#   docker compose down            stop + remove (data/ bind mounts survive)
+#   docker compose down -v         stop + remove the bind mounts too
+#
+#   Read  : psql "host=127.0.0.1 port=6434 dbname=bzdb_ro user=bz_app"
+#   Write : psql "host=127.0.0.1 port=6433 dbname=bzdb_rw user=bz_app"
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: bzpg
+
+services:
+  # ══════════════════════════════════════════════════════════════════════════
+  # POSTGRESQL — PRIMARY
+  # ══════════════════════════════════════════════════════════════════════════
+  pg_primary:
+    image: ${REPO_NAME:-georgelza}/citus-repmgr:${CITUS_REPMGR_VERSION:-12.1.14}
+    build: ../deploy/infrastructure/pg
+    container_name: bz-pg-primary
+    hostname: bz-pg-primary
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:?POSTGRES_SUPERUSER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD must be set in .env}
+      # PG_DB_NAME is the database the postgres image auto-creates and the one
+      # docker-entrypoint-initdb.d connects to for admin work. It is NOT the
+      # application database — sql/postgresdb/01_bootstrap.sh creates that
+      # (BZ_DB_NAME) separately.
+      POSTGRES_DB: ${PG_DB_NAME:?PG_DB_NAME must be set in .env}
+      BZ_DB_NAME: ${BZ_DB_NAME:?BZ_DB_NAME must be set in .env}
+      BZ_APP_USER: ${PG_APP_USER:-bz_app}
+      BZ_APP_PASSWORD: ${PG_APP_PASSWORD:?PG_APP_PASSWORD must be set in .env}
+      BZ_RO_USER: ${PG_RO_USER:-bz_ro}
+      BZ_RO_PASSWORD: ${PG_RO_PASSWORD:?PG_RO_PASSWORD must be set in .env}
+      BZ_ADMIN_USER: ${PG_ADMIN_USER:-bz_admin}
+      BZ_ADMIN_PASSWORD: ${PG_ADMIN_PASSWORD:?PG_ADMIN_PASSWORD must be set in .env}
+      BZ_REPL_USER: ${PG_REPL_USER:-replicator}
+      BZ_REPL_PASSWORD: ${PG_REPL_PASSWORD:?PG_REPL_PASSWORD must be set in .env}
+      REPMGR_NODE_ROLE: primary
+      REPMGR_NODE_ID: 1
+      REPMGR_NODE_NAME: ${PG_PRIMARY_NODE_NAME:-bz-pg-primary}
+      REPMGR_REPL_USER: ${PG_REPL_USER:-replicator}
+      REPMGR_REPL_PASSWORD: ${PG_REPL_PASSWORD:?PG_REPL_PASSWORD must be set in .env}
+    volumes:
+      - ./data/postgres/primary:/var/lib/postgresql/data
+      # Roles, application database and schema are created ONCE, on first init of
+      # an empty data directory. The replica clones this directory instead of
+      # running these (see pg_replica).
+      - ./sql/postgresdb:/docker-entrypoint-initdb.d:ro
+    configs:
+      - source: pg_conf
+        target: /etc/postgresql/postgresql.conf
+      - source: pg_hba
+        target: /etc/postgresql/pg_hba.conf
+    command: -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      # pg_isready ALONE is not enough: it is happy on a node that is in recovery,
+      # and on a promoted replica. Assert the primary is accepting writes.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER} -d ${PG_DB_NAME} -q && PGPASSWORD=$$POSTGRES_PASSWORD psql -U ${POSTGRES_SUPERUSER} -d ${PG_DB_NAME} -tAc \"SELECT pg_is_in_recovery() = false\" | grep -qx t"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # POSTGRESQL — REPLICA (streaming standby; READS ONLY until promoted)
+  # Re-enabled in this version (commented out in deploy/ since 2026-08-26).
+  # ══════════════════════════════════════════════════════════════════════════
+  pg_replica:
+    image: ${REPO_NAME:-georgelza}/citus-repmgr:${CITUS_REPMGR_VERSION:-12.1.14}
+    build: ../deploy/infrastructure/pg
+    container_name: bz-pg-replica
+    hostname: bz-pg-replica
+    depends_on:
+      pg_primary:
+        # Waiting for HEALTHY, not just started: the replica's first act is
+        # `repmgr standby clone`, which needs the primary to accept connections.
+        # Cloning a not-yet-ready primary fails and the restart loop begins.
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:?POSTGRES_SUPERUSER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD must be set in .env}
+      POSTGRES_DB: ${PG_DB_NAME:?PG_DB_NAME must be set in .env}
+      REPMGR_NODE_ROLE: standby
+      REPMGR_NODE_ID: 2
+      REPMGR_NODE_NAME: ${PG_REPLICA_NODE_NAME:-bz-pg-replica}
+      REPMGR_PRIMARY_HOST: ${PG_PRIMARY_NODE_NAME:-bz-pg-primary}
+      REPMGR_REPL_USER: ${PG_REPL_USER:-replicator}
+      REPMGR_REPL_PASSWORD: ${PG_REPL_PASSWORD:?PG_REPL_PASSWORD must be set in .env}
+    volumes:
+      - ./data/postgres/replica:/var/lib/postgresql/data
+      # NOTE: ./sql/postgresdb is deliberately NOT mounted here. A standby must
+      # never run initdb or docker-entrypoint-initdb.d — the image entrypoint
+      # clones the primary's data directory, which already contains the roles,
+      # the application database and the schema.
+    configs:
+      - source: pg_conf
+        target: /etc/postgresql/postgresql.conf
+      - source: pg_hba
+        target: /etc/postgresql/pg_hba.conf
+    # primary_slot_name is set HERE, on the replica's command line, and not in
+    # postgresql.conf — one conf file is mounted into both nodes, and this GUC is
+    # the standby's half of the slot contract. The slot itself is created on the
+    # primary by sql/postgresdb/01_bootstrap.sh. If the two ever disagree, the
+    # replica logs "replication slot ... does not exist" and retries forever.
+    command: -c config_file=/etc/postgresql/postgresql.conf -c primary_slot_name=bz_replica_slot
+    healthcheck:
+      # pg_is_in_recovery() = t  ← asserted, not inferred. A standby reports true
+      # only while it is genuinely replaying. NOTE this healthcheck WILL FAIL
+      # after a failover, because the promoted node is no longer in recovery —
+      # that is correct behaviour, not a bug: it stops the read proxy treating a
+      # former standby as a replica it can fail over from. See bz/README.md §6.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER} -d ${PG_DB_NAME} -q && PGPASSWORD=$$POSTGRES_PASSWORD psql -U ${POSTGRES_SUPERUSER} -d ${PG_DB_NAME} -tAc \"SELECT pg_is_in_recovery()\" | grep -qx t"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # ONE-SHOT: register the primary node with repmgr, then exit.
+  # Runs AFTER the database is up and TCP-reachable — see the long note in
+  # scripts/02_register_primary.sh for why this cannot be an initdb.d script.
+  # The primary's data directory is mounted READ-ONLY: repmgr reads the cluster
+  # system identifier out of pg_control, and nothing here may write to PGDATA.
+  # ══════════════════════════════════════════════════════════════════════════
+  repmgr_register:
+    image: ${REPO_NAME:-georgelza}/citus-repmgr:${CITUS_REPMGR_VERSION:-12.1.14}
+    container_name: bz-repmgr-register
+    depends_on:
+      pg_primary:
+        condition: service_healthy
+    # Override the image entrypoint: the image's own would try to start a second
+    # PostgreSQL. This service runs one command and exits (restart: "no").
+    entrypoint: ["/bin/bash", "/bootstrap/02_register_primary.sh"]
+    volumes:
+      # NOTE: scripts/, NOT sql/postgresdb/. Everything in sql/postgresdb is
+      # mounted at /docker-entrypoint-initdb.d on the primary, and that runner
+      # executes every top-level .sh in it — so a registration script living
+      # there would run during first init, against a socket-only server it cannot
+      # reach over TCP.
+      - ./scripts:/bootstrap:ro
+      - ./data/postgres/primary:/var/lib/postgresql/data:ro
+    environment:
+      REPMGR_NODE_ID: 1
+      REPMGR_NODE_NAME: ${PG_PRIMARY_NODE_NAME:-bz-pg-primary}
+      REPMGR_PRIMARY_HOST: ${PG_PRIMARY_NODE_NAME:-bz-pg-primary}
+      REPMGR_PRIMARY_PORT: 5432
+      BZ_REPL_USER: ${PG_REPL_USER:-replicator}
+      BZ_REPL_PASSWORD: ${PG_REPL_PASSWORD:?PG_REPL_PASSWORD must be set in .env}
+    restart: "no"
+
+  # ── repmgrd on the PRIMARY only ─────────────────────────────────────────────
+  # Metadata and monitoring. It does NOT perform failover: repmgrd's automatic
+  # promotion would need this node registered, and repmgr standby register
+  # rewrites primary_conninfo WITHOUT the replication password (pg_hba is
+  # scram-only), which breaks streaming on the next restart. Failover is owned by
+  # pgpool_rw instead, which promotes via SELECT pg_promote() and never touches
+  # primary_conninfo. Full reasoning: scripts/02_register_primary.sh header.
+  repmgrd_primary:
+    image: ${REPO_NAME:-georgelza}/citus-repmgr:${CITUS_REPMGR_VERSION:-12.1.14}
+    build: ../deploy/infrastructure/pg
+    container_name: bz-repmgrd-primary
+    hostname: bz-repmgrd-primary
+    depends_on:
+      repmgr_register:
+        condition: service_completed_successfully
+    environment:
+      REPMGR_NODE_ROLE: repmgrd
+      REPMGR_NODE_ID: 1
+      REPMGR_NODE_NAME: ${PG_PRIMARY_NODE_NAME:-bz-pg-primary}
+      REPMGR_REPL_USER: ${PG_REPL_USER:-replicator}
+      REPMGR_REPL_PASSWORD: ${PG_REPL_PASSWORD:?PG_REPL_PASSWORD must be set in .env}
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # WRITE ENDPOINT — Pgpool-II. ONE endpoint for all DML; it follows the primary.
+  # ══════════════════════════════════════════════════════════════════════════
+  pgpool_rw:
+    image: bz/pgpool2:${PGPOOL2_VERSION:-4.3.5}
+    build: ./infrastructure/pgpool2
+    container_name: bz-pgpool-rw
+    hostname: bz-pgpool-rw
+    depends_on:
+      pg_primary:
+        condition: service_healthy
+      pg_replica:
+        # service_started, not healthy: this endpoint must come up and serve
+        # whichever node is primary even while the standby is still cloning.
+        # Pgpool-II copes with a backend it cannot reach; it must not be prevented
+        # from starting by one.
+        condition: service_started
+    ports:
+      - "${HOST_PORT_PROXY_RW:-6433}:6432"
+    environment:
+      # Credentials the failover_command needs to promote a node. Kept out of
+      # pgpool.conf on purpose so the credential file stays the single place
+      # roles are defined, and so rotating a password is a .env edit plus a
+      # restart rather than a config edit.
+      BZ_PROMOTE_USER: ${PG_PROMOTE_USER:-postgres}
+      BZ_PROMOTE_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD must be set in .env}
+    volumes:
+      - ./conf/pgpool2:/etc/pgpool2:ro
+    healthcheck:
+      # NOT just a TCP probe. "the port is open" is precisely the condition that
+      # hides a broken backend set — the listener comes up happily with zero
+      # usable backends. This asks the admin console for the node table and
+      # requires EXACTLY ONE primary, which is the invariant the whole write path
+      # rests on. Two primaries (split-brain) or none (nobody to write to) both
+      # fail this check.
+      # Uses bz_admin, NOT the pgbouncer admin user: Pgpool-II has no separate
+      # console identity, so the console must authenticate as a real PostgreSQL
+      # role. The command is SHOW POOL_NODES — plain `SHOW NODES` is rejected
+      # with "unrecognized configuration parameter".
+      #
+      # Matches on the UNPADDED form `|primary|primary|`. `psql -tA` emits
+      # `0|bz-pg-primary|5432|up|up|0.500000|primary|primary|...` with no column
+      # padding, so a regex written against the pretty-printed table
+      # (`| primary | primary |`) matches nothing and this healthcheck can never
+      # pass.
+      #
+      # THE ONE CONDITION: exactly one node whose PG ROLE is primary, i.e. column
+      # 8 of the unpadded row:
+      #   0|bz-pg-primary|5432|up|up|0.5|primary|primary|...   <- pg_role=primary
+      #   1|bz-pg-replica |5432|up|up|0.5|standby|primary|... <- ALSO primary
+      # Zero means writes have no target; two means split-brain with diverged
+      # data. Both are genuinely broken, so this can fail.
+      #
+      # IT MUST COUNT THE pg_role COLUMN, NOT THE FIRST 'primary' MATCH. An
+      # earlier version grepped for '|primary|primary|' and was WRONG: when the
+      # old primary was restarted after a failover it came back believing it was
+      # primary, while the promoted node was also genuinely primary. That state
+      # produced:
+      #   0|bz-pg-primary|5432|up|up|0.500000|primary|primary|...
+      #   1|bz-pg-replica |5432|up|up|0.500000|standby|primary|...
+      # ...exactly one '|primary|primary|' match, so the check reported HEALTHY
+      # while two primaries were accepting writes' worth of divergent history.
+      # Counting field 8 catches it. This is the case the check exists for.
+      #
+      # IT DELIBERATELY DOES *NOT* REQUIRE A STANDBY. An earlier version did, and
+      # it was wrong in the most annoying possible way: after a SUCCESSFUL
+      # failover this endpoint is doing its job perfectly — one primary, writes
+      # flowing — and the check failed anyway (observed: exit=1 on every 10s tick,
+      # purely because the dead node's row is `standby|unknown` rather than
+      # `standby|standby`). A healthcheck that reports a healthy-after-failover
+      # system as unhealthy trains everyone to ignore it, and the day it matters
+      # nobody will read it. Redundancy is a capacity concern, not a health one;
+      # watch it in SHOW POOL_NODES, do not encode it here.
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD='${PG_ADMIN_PASSWORD:?PG_ADMIN_PASSWORD must be set in .env}'
+          psql -h 127.0.0.1 -p 6432 -U '${PG_ADMIN_USER:-bz_admin}' -d '${BZ_DB_NAME:-bzdb}'
+          -tAc 'SHOW POOL_NODES;' | awk -F'|' '$$8=="primary"' | wc -l | tr -d ' ' | grep -qx 1
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # READ ENDPOINT — PgBouncer, spread across every node, read-only.
+  # Same credentials as the write endpoint; only the port differs.
+  # ══════════════════════════════════════════════════════════════════════════════
+  pgbouncer_ro:
+    image: edoburu/pgbouncer:${PGBOUNCER_VERSION:-v1.26.0-p0}
+    container_name: bz-pgbouncer-ro
+    hostname: bz-pgbouncer-ro
+    depends_on:
+      pg_primary:
+        condition: service_healthy
+      pg_replica:
+        # service_started, NOT healthy, and deliberately so: this proxy must come
+        # up and serve reads from the primary even while the standby is still
+        # cloning. NOTE the host list is NOT a failover list — PgBouncer gives an
+        # unreachable host its turn anyway (see conf/pgbouncer/ro/pgbouncer.ini),
+        # so a replica that is absent costs read capacity on its share of
+        # round-robin, not availability of the endpoint.
+        condition: service_started
+    ports:
+      - "${HOST_PORT_PROXY_RO:-6434}:6432"
+    volumes:
+      - ./conf/pgbouncer/ro:/etc/pgbouncer:ro
+    healthcheck:
+      # `${...}` is substituted by COMPOSE at parse time from bz/.env; `$$` is
+      # what the CONTAINER sees. `:?` makes Compose itself fail on a missing
+      # field rather than authenticating against a hardcoded default and
+      # reporting healthy.
+      test: ["CMD-SHELL", "PGPASSWORD='${PGPOOL_ADMIN_PASSWORD:?PGPOOL_ADMIN_PASSWORD must be set in .env}' psql -h 127.0.0.1 -p 6432 -U '${PGPOOL_ADMIN_USER:-pgbouncer}' -d pgbouncer -c 'SHOW POOLS;' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  default:
+    name: bzpg
+
+configs:
+  pg_conf:
+    file: conf/pg/postgresql.conf
+  pg_hba:
+    file: conf/pg/pg_hba.conf
