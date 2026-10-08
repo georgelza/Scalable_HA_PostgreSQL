@@ -342,6 +342,40 @@ docker compose up -d --build
 | `syntax error at or near ":"` in schema.sql | psql does not substitute `:'var'` inside a `$$` body |
 
 
+
+
+
+## THE END
+
+And like that we’re done with our little trip down another Rabbit Hole, Till next time. 
+
+Thanks for following. 
+
+
+### The Rabbit Hole
+
+<img src="blog-doc/diagrams/rabbithole.jpg" alt="Our Build" width="450" height="350">
+
+
+### ABOUT ME
+
+I’m a techie, a technologist, always curious, love data, have for as long as I can remember always worked with data in one form or the other, Database admin, Database product lead, data platforms architect, infrastructure architect hosting databases, backing it up, optimizing performance, accessing it. Data data data… it makes the world go round.
+In recent years, pivoted into a more generic Technology Architect role, capable of full stack architecture.
+
+### By: George Leonard
+
+- georgelza@gmail.com
+- https://www.linkedin.com/in/george-leonard-945b502/
+- https://medium.com/@georgelza
+
+
+
+<img src="blog-doc/diagrams/TechCentralFeb2020-george-leonard.jpg" alt="Me" width="400" height="400">
+
+
+
+
+
 ## Layout
 
 ```
